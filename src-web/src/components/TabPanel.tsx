@@ -39,6 +39,9 @@ interface Props {
   sliceError: string | null;
   stringsScanning?: boolean;
   onSearch: (query: string, options: SearchOptions) => void;
+  showSoName?: boolean;
+  showAbsAddress?: boolean;
+  addrColorHighlight?: boolean;
 }
 
 export default function TabPanel({
@@ -49,6 +52,9 @@ export default function TabPanel({
   isSlicing, sliceDuration, sliceError,
   stringsScanning,
   onSearch,
+  showSoName = false,
+  showAbsAddress = false,
+  addrColorHighlight = false,
 }: Props) {
   const [active, setActive] = useState<TabName>("Memory");
   const [memResetKey, setMemResetKey] = useState(0);
@@ -257,6 +263,9 @@ export default function TabPanel({
               caseSensitive={searchOptions.caseSensitive}
               fuzzy={searchOptions.fuzzyMatch}
               useRegex={searchOptions.useRegex}
+              showSoName={showSoName}
+              showAbsAddress={showAbsAddress}
+              addrColorHighlight={addrColorHighlight}
             />
             {searchStatus && (
               <div style={{

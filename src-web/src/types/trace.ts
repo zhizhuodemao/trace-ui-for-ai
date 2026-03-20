@@ -47,8 +47,11 @@ export interface SessionData {
 export interface SearchMatch {
   seq: number;
   address: string;
+  so_offset: string;
+  so_name: string | null;
   disasm: string;
   changes: string;
+  reg_before: string;
   mem_rw: string | null;
   call_info: CallInfoDto | null;
   hidden_content: string | null;

@@ -37,6 +37,8 @@ function applyToDOM(id: ThemeId, colors: ThemeColors) {
   style.setProperty("--text-primary", colors.textPrimary);
   style.setProperty("--text-secondary", colors.textSecondary);
   style.setProperty("--text-address", colors.textAddress);
+  style.setProperty("--text-so-name", colors.textSoName);
+  style.setProperty("--text-abs-address", colors.textAbsAddress);
   style.setProperty("--text-changes", colors.textChanges);
   style.setProperty("--text-ascii-printable", colors.textAsciiPrintable);
   style.setProperty("--text-ascii-nonprint", colors.textAsciiNonprint);

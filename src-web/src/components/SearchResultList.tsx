@@ -15,7 +15,7 @@ const DETAIL_TOP_MARGIN = 4;
 const DETAIL_BOTTOM_GAP = 6;
 const DETAIL_VERTICAL_PADDING = 6;
 const DETAIL_BORDER = 1;
-const DETAIL_INDENT = 48 + 30 + 90 + 90;
+const DETAIL_INDENT = 40 + 30 + 90 + 90;
 const DETAIL_LEFT_PADDING = 8 + DETAIL_INDENT;
 const DETAIL_MAX_LINES = 16; // hexdump 16 行 = 256 字节
 
@@ -70,6 +70,9 @@ interface SearchResultListProps {
   caseSensitive?: boolean;
   fuzzy?: boolean;
   useRegex?: boolean;
+  showSoName?: boolean;
+  showAbsAddress?: boolean;
+  addrColorHighlight?: boolean;
 }
 
 export default function SearchResultList({
@@ -81,16 +84,46 @@ export default function SearchResultList({
   caseSensitive,
   fuzzy,
   useRegex,
+  showSoName = false,
+  showAbsAddress = false,
+  addrColorHighlight = false,
 }: SearchResultListProps) {
   const rwCol = useResizableColumn(30, "right", 20, "search:rw");
   const seqCol = useResizableColumn(90, "right", 50, "search:seq");
   const addrCol = useResizableColumn(90, "right", 50, "search:addr");
-  const changesCol = useResizableColumn(
-    Math.min(300, Math.round(window.innerWidth * 0.2)), "left", 40, "search:changes"
-  );
+  const disasmCol = useResizableColumn(320, "right", 200);
+  const beforeCol = useResizableColumn(420, "right", 40);
+  const HANDLE_W = 8;
+
+  // 地址列宽度随显示模式自适应（与 TraceTable 同步）
+  useEffect(() => {
+    const CHAR_W = 7.2;
+    const PAD = 16;
+    let maxLen = 0;
+    for (const match of results) {
+      let len = (match.so_offset || match.address || "").length;
+      if (showSoName && match.so_name) len += match.so_name.length + 3;
+      if (showAbsAddress && match.address) len += match.address.length + 1;
+      if (len > maxLen) maxLen = len;
+      if (maxLen > 60) break; // 足够估算了
+    }
+    const estimated = Math.max(90, Math.ceil(maxLen * CHAR_W + PAD));
+    addrCol.setWidth(estimated);
+  }, [showSoName, showAbsAddress, results]);
+
+  const formatAddr = useCallback((match: SearchMatch) => {
+    const parts: string[] = [];
+    if (showSoName && match.so_name) parts.push(`[${match.so_name}]`);
+    if (showAbsAddress && match.address) {
+      parts.push(`${match.address}!${match.so_offset}`);
+    } else {
+      parts.push(match.so_offset || match.address);
+    }
+    return parts.join(" ");
+  }, [showSoName, showAbsAddress]);
 
   const HANDLE_STYLE: React.CSSProperties = {
-    width: 8, cursor: "col-resize", flexShrink: 0,
+    width: 8, cursor: "col-resize", flexShrink: 0, alignSelf: "stretch",
     display: "flex", alignItems: "center", justifyContent: "center",
   };
 
@@ -100,7 +133,15 @@ export default function SearchResultList({
   const parentRef = useRef<HTMLDivElement>(null);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [containerHeight, setContainerHeight] = useState(0);
+  const [containerWidth, setContainerWidth] = useState(0);
   const [scrollRow, setScrollRow] = useState(0);
+
+  // 推式布局：与 TraceTable 一致，Disasm/Before 受容器宽度约束，Changes 吸收剩余
+  const colFixedLeft = 40 + rwCol.width + HANDLE_W + seqCol.width + HANDLE_W + addrCol.width + HANDLE_W;
+  const MIN_CHANGES_WIDTH = 60;
+  const availableForRight = Math.max(0, containerWidth - colFixedLeft - 2 * HANDLE_W - MIN_CHANGES_WIDTH);
+  const effectiveDisasmWidth = Math.max(200, Math.min(disasmCol.width, availableForRight - 40));
+  const effectiveBeforeWidth = Math.max(40, Math.min(beforeCol.width, availableForRight - effectiveDisasmWidth));
 
   const seqToIndex = useMemo(() => {
     const map = new Map<number, number>();
@@ -178,9 +219,10 @@ export default function SearchResultList({
     let timer = 0;
     const ro = new ResizeObserver((entries) => {
       clearTimeout(timer);
-      const h = entries[0].contentRect.height;
+      const { height: h, width: w } = entries[0].contentRect;
       timer = window.setTimeout(() => {
         setContainerHeight(h);
+        setContainerWidth(w);
       }, document.documentElement.dataset.separatorDrag ? 300 : 0);
     });
     el.addEventListener("scroll", handleScroll);
@@ -215,6 +257,7 @@ export default function SearchResultList({
     <>
       <div style={{
         display: "flex",
+        alignItems: "center",
         padding: "4px 8px",
         background: "var(--bg-secondary)",
         borderBottom: "1px solid var(--border-color)",
@@ -222,16 +265,18 @@ export default function SearchResultList({
         color: "var(--text-secondary)",
         flexShrink: 0,
       }}>
-        <span style={{ width: 48, flexShrink: 0 }}></span>
+        <span style={{ width: 40, flexShrink: 0 }}></span>
         <span style={{ width: rwCol.width, flexShrink: 0 }}>R/W</span>
         <div onMouseDown={rwCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: seqCol.width, flexShrink: 0 }}>Seq</span>
         <div onMouseDown={seqCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: addrCol.width, flexShrink: 0 }}>Address</span>
         <div onMouseDown={addrCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
-        <span style={{ flex: 1 }}>Disassembly</span>
-        <div onMouseDown={changesCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
-        <span style={{ width: changesCol.width, flexShrink: 0 }}>Changes</span>
+        <span style={{ width: effectiveDisasmWidth, flexShrink: 0 }}>Disassembly</span>
+        <div onMouseDown={disasmCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
+        <span style={{ width: effectiveBeforeWidth, flexShrink: 0 }}>Before</span>
+        <div onMouseDown={beforeCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
+        <span style={{ flex: 1 }}>Changes</span>
         <span style={{ width: MINIMAP_WIDTH + 12, flexShrink: 0 }}></span>
       </div>
 
@@ -292,16 +337,28 @@ export default function SearchResultList({
                     alignItems: "center",
                     padding: "0 8px",
                   }}>
-                    <span style={{ width: 48, flexShrink: 0 }}></span>
+                    <span style={{ width: 40, flexShrink: 0 }}></span>
                     <span style={{ width: rwCol.width, flexShrink: 0, color: "var(--text-secondary)" }}>
                       {hl(match.mem_rw === "W" ? "W" : match.mem_rw === "R" ? "R" : "")}
                     </span>
-                    <span style={{ width: 8, flexShrink: 0 }} />
+                    <span style={{ width: HANDLE_W, flexShrink: 0 }} />
                     <span style={{ width: seqCol.width, flexShrink: 0, color: "var(--text-secondary)" }}>{match.seq + 1}</span>
-                    <span style={{ width: 8, flexShrink: 0 }} />
-                    <span style={{ width: addrCol.width, flexShrink: 0, color: "var(--text-address)" }}>{hl(match.address)}</span>
-                    <span style={{ width: 8, flexShrink: 0 }} />
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span style={{ width: HANDLE_W, flexShrink: 0 }} />
+                    <span style={{
+                      width: addrCol.width, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      color: addrColorHighlight ? "var(--text-address)" : "var(--text-secondary)",
+                    }}>
+                      {addrColorHighlight && showSoName && match.so_name ? (
+                        <>
+                          <span style={{ color: "var(--text-so-name)" }}>[{match.so_name}] </span>
+                          {showAbsAddress && match.address ? (
+                            <><span style={{ color: "var(--text-abs-address)" }}>{match.address}</span>!{match.so_offset}</>
+                          ) : (match.so_offset || match.address)}
+                        </>
+                      ) : hl(formatAddr(match))}
+                    </span>
+                    <span style={{ width: HANDLE_W, flexShrink: 0 }} />
+                    <span style={{ width: effectiveDisasmWidth, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       <DisasmHighlight text={match.disasm} highlightQuery={searchQuery} caseSensitive={caseSensitive} fuzzy={fuzzy} useRegex={useRegex} />
                       {match.call_info && (
                         <span
@@ -318,10 +375,22 @@ export default function SearchResultList({
                         </span>
                       )}
                     </span>
-                    <span style={{ width: 8, flexShrink: 0 }} />
+                    <span style={{ width: HANDLE_W, flexShrink: 0 }} />
                     <span
                       style={{
-                        width: changesCol.width,
+                        width: effectiveBeforeWidth, flexShrink: 0,
+                        color: "var(--text-secondary)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {hl(match.reg_before)}
+                    </span>
+                    <span style={{ width: HANDLE_W, flexShrink: 0 }} />
+                    <span
+                      style={{
+                        flex: 1,
                         color: "var(--text-changes)",
                         overflow: "hidden",
                         textOverflow: "ellipsis",
@@ -377,8 +446,8 @@ export default function SearchResultList({
               getLines={searchGetLines}
               selectedSeq={selectedSeq}
               rightOffset={12}
-              showSoName={false}
-              showAbsAddress={false}
+              showSoName={showSoName}
+              showAbsAddress={showAbsAddress}
             />
             <CustomScrollbar
               currentRow={scrollRow}

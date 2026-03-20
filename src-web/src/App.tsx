@@ -1124,6 +1124,9 @@ function App() {
                 sliceError={slice.sliceError}
                 stringsScanning={stringsScanningSessionId === activeSessionId}
                 onSearch={handleSearch}
+                showSoName={preferences.showSoName}
+                showAbsAddress={preferences.showAbsAddress}
+                addrColorHighlight={preferences.addrColorHighlight}
               />
             </Panel>
           </Group>

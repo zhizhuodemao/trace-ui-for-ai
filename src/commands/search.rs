@@ -24,8 +24,11 @@ fn default_max_results() -> u32 {
 pub struct SearchMatch {
     pub seq: u32,
     pub address: String,
+    pub so_offset: String,
+    pub so_name: Option<String>,
     pub disasm: String,
     pub changes: String,
+    pub reg_before: String,
     pub mem_rw: Option<String>,
     pub call_info: Option<CallInfoDto>,
     pub hidden_content: Option<String>,
@@ -193,8 +196,11 @@ fn search_chunk(
                     matches.push(SearchMatch {
                         seq: parsed.seq,
                         address: parsed.address,
+                        so_offset: parsed.so_offset,
+                        so_name: parsed.so_name,
                         disasm: parsed.disasm,
                         changes: parsed.changes,
+                        reg_before: parsed.reg_before,
                         mem_rw: parsed.mem_rw,
                         call_info,
                         hidden_content,

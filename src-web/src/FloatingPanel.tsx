@@ -12,6 +12,7 @@ import { useFloatingWindowInit } from "./hooks/useFloatingWindowInit";
 import { cleanupListeners, cleanupListener } from "./utils/tauriEvents";
 import type { SearchMatch, SearchResult } from "./types/trace";
 import SearchBar, { SearchOptions } from "./components/SearchBar";
+import { usePreferences } from "./hooks/usePreferences";
 
 const PANEL_TITLES: Record<string, string> = {
   memory: "Memory",
@@ -246,6 +247,7 @@ function FloatingSearchContent({
   onJumpToMatch: (match: SearchMatch) => void;
   onSearch: (query: string, options: SearchOptions) => void;
 }) {
+  const { preferences } = usePreferences();
   const [localQuery, setLocalQuery] = useState(searchQuery);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -342,6 +344,9 @@ function FloatingSearchContent({
             caseSensitive={caseSensitiveState}
             fuzzy={fuzzyState}
             useRegex={useRegexState}
+            showSoName={preferences.showSoName}
+            showAbsAddress={preferences.showAbsAddress}
+            addrColorHighlight={preferences.addrColorHighlight}
           />
         </div>
       )}
