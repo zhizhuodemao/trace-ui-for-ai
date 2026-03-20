@@ -28,6 +28,7 @@ export default function DependencyTreePanel() {
   const [activeTab, setActiveTab] = useState<TabKey>("tree");
   const [maxNodes, setMaxNodes] = useState(DEFAULT_LIMIT);
   const [dataOnly, setDataOnly] = useState(false);
+  const [exprMode, setExprMode] = useState<"c" | "asm">("c");
 
   // Esc to close
   useEffect(() => {
@@ -152,6 +153,23 @@ export default function DependencyTreePanel() {
             {tab.label}
           </button>
         ))}
+        <button
+          onClick={() => setExprMode(exprMode === "c" ? "asm" : "c")}
+          style={{
+            padding: "3px 8px",
+            fontSize: 10,
+            fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+            background: "var(--bg-tertiary, #2c313a)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 3,
+            color: "var(--text-primary, #abb2bf)",
+            cursor: "pointer",
+            marginLeft: 8,
+          }}
+          title={exprMode === "c" ? "Switch to Assembly" : "Switch to C Pseudocode"}
+        >
+          {exprMode === "c" ? "C" : "ASM"}
+        </button>
         <span style={{
           marginLeft: "auto",
           fontSize: 10,
@@ -213,9 +231,9 @@ export default function DependencyTreePanel() {
 
       {/* Content */}
       {activeTab === "tree" ? (
-        <ExpressionTreeView graph={graph} sessionId={params.sessionId} />
+        <ExpressionTreeView graph={graph} sessionId={params.sessionId} exprMode={exprMode} />
       ) : (
-        <DagGraphView graph={graph} sessionId={params.sessionId} />
+        <DagGraphView graph={graph} sessionId={params.sessionId} exprMode={exprMode} />
       )}
     </div>
   );

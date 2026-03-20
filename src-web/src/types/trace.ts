@@ -128,6 +128,7 @@ export interface FunctionCallsResult {
 export interface NodeInfo {
   seq: number;
   expression: string;
+  asm: string;              // 新增
   operation: string;
   isLeaf: boolean;
   value: string | null;

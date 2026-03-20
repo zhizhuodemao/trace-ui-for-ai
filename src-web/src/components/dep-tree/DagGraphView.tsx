@@ -114,9 +114,10 @@ function buildAdj(graph: DependencyGraph, seqIdx: Map<number, number>): Map<numb
 interface Props {
   graph: DependencyGraph;
   sessionId: string;
+  exprMode: "c" | "asm";
 }
 
-export default function DagGraphView({ graph, sessionId }: Props) {
+export default function DagGraphView({ graph, sessionId, exprMode }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const panRef = useRef({ x: 0, y: 0 });
@@ -288,9 +289,10 @@ export default function DagGraphView({ graph, sessionId }: Props) {
           ctx.beginPath();
           ctx.roundRect(layout.x[i] - NODE_W / 2, layout.y[i] - NODE_H / 2, NODE_W, NODE_H, 6);
           ctx.stroke();
-          const label = nodes[i].expression.length > 22
-            ? nodes[i].expression.slice(0, 20) + "…"
-            : nodes[i].expression;
+          const exprText = exprMode === "c" ? nodes[i].expression : nodes[i].asm;
+          const label = exprText.length > 22
+            ? exprText.slice(0, 20) + "…"
+            : exprText;
           ctx.fillText(label, layout.x[i], layout.y[i] + 2, NODE_W - 8);
         }
       }
@@ -316,7 +318,7 @@ export default function DagGraphView({ graph, sessionId }: Props) {
       cw - 8,
       ch - 16,
     );
-  }, [graph, layout, grid, adj]);
+  }, [graph, layout, grid, adj, exprMode]);
 
   const scheduleDraw = useCallback(() => {
     cancelAnimationFrame(rafRef.current);

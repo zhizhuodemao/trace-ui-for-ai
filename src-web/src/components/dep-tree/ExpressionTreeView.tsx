@@ -41,9 +41,10 @@ interface TreeNodeProps {
   expandedSet: React.MutableRefObject<Set<number>>; // 追踪哪些 seq 已在树中展开过
   sessionId: string;
   scrollContainer: React.RefObject<HTMLDivElement | null>;
+  exprMode: "c" | "asm";
 }
 
-function TreeNode({ seq, depth, nodeMap, childrenMap, expandedSet, sessionId, scrollContainer }: TreeNodeProps) {
+function TreeNode({ seq, depth, nodeMap, childrenMap, expandedSet, sessionId, scrollContainer, exprMode }: TreeNodeProps) {
   const node = nodeMap.get(seq);
   const childSeqs = childrenMap.get(seq) || [];
 
@@ -80,6 +81,8 @@ function TreeNode({ seq, depth, nodeMap, childrenMap, expandedSet, sessionId, sc
   }, [sessionId, seq, isRef, scrollContainer]);
 
   if (!node) return null;
+
+  const exprText = exprMode === "c" ? node.expression : node.asm;
 
   return (
     <div style={{ marginLeft: depth > 0 ? 16 : 0 }}>
@@ -129,7 +132,7 @@ function TreeNode({ seq, depth, nodeMap, childrenMap, expandedSet, sessionId, sc
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
         }}>
-          {node.expression}
+          {exprText}
         </span>
 
         {/* Ref badge */}
@@ -190,6 +193,7 @@ function TreeNode({ seq, depth, nodeMap, childrenMap, expandedSet, sessionId, sc
               expandedSet={expandedSet}
               sessionId={sessionId}
               scrollContainer={scrollContainer}
+              exprMode={exprMode}
             />
           ))}
         </div>
@@ -201,9 +205,10 @@ function TreeNode({ seq, depth, nodeMap, childrenMap, expandedSet, sessionId, sc
 interface ExpressionTreeViewProps {
   graph: DependencyGraph;
   sessionId: string;
+  exprMode: "c" | "asm";
 }
 
-export default function ExpressionTreeView({ graph, sessionId }: ExpressionTreeViewProps) {
+export default function ExpressionTreeView({ graph, sessionId, exprMode }: ExpressionTreeViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const expandedSet = useRef(new Set<number>());
 
@@ -229,6 +234,7 @@ export default function ExpressionTreeView({ graph, sessionId }: ExpressionTreeV
         expandedSet={expandedSet}
         sessionId={sessionId}
         scrollContainer={containerRef}
+        exprMode={exprMode}
       />
     </div>
   );
