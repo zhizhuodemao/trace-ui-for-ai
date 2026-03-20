@@ -12,6 +12,8 @@ export interface Preferences {
   scanStringsOnBuild: boolean;
   theme: ThemeId;
   confirmTaintRestore: boolean;
+  showSoName: boolean;
+  showAbsAddress: boolean;
 }
 
 export interface TaintConfig {
@@ -42,6 +44,8 @@ const DEFAULTS: Preferences = {
   scanStringsOnBuild: true,
   theme: "dark",
   confirmTaintRestore: true,
+  showSoName: false,
+  showAbsAddress: false,
 };
 
 function load(): Preferences {

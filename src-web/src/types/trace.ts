@@ -9,6 +9,7 @@ export interface TraceLine {
   seq: number;
   address: string;
   so_offset: string;
+  so_name: string | null;
   disasm: string;
   changes: string;
   reg_before: string;
