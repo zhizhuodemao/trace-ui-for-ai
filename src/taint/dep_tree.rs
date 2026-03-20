@@ -6,9 +6,10 @@ use crate::flat::scan_view::ScanView;
 use crate::taint::def_use::determine_def_use;
 use crate::taint::gumtrace_parser;
 use crate::taint::insn_class;
+use crate::taint::insn_class::InsnClass;
 use crate::taint::parser;
 use crate::taint::scanner::{CONTROL_DEP_BIT, LINE_MASK, PAIR_HALF2_BIT, PAIR_SHARED_BIT};
-use crate::taint::types::TraceFormat;
+use crate::taint::types::{Operand, ParsedLine, TraceFormat};
 use rustc_hash::FxHashMap;
 
 /// 扁平 DAG：节点数组 + 边列表，无递归嵌套
@@ -304,5 +305,536 @@ fn extract_changes(line: &str) -> String {
         line[pos + 3..].trim().to_string()
     } else {
         String::new()
+    }
+}
+
+// ─── C 伪代码生成辅助函数 ───────────────────────────────────────────────────
+
+/// 将操作数格式化为字符串（寄存器名或立即数）。
+fn fmt_operand(op: &Operand) -> String {
+    match op {
+        Operand::Reg(r) => format!("{:?}", r),
+        Operand::RegLane(r, lane) => format!("{:?}[{}]", r, lane),
+        Operand::Imm(v) => {
+            if *v < 0 {
+                format!("-0x{:x}", -v)
+            } else {
+                format!("0x{:x}", v)
+            }
+        }
+    }
+}
+
+fn op(ops: &[Operand], idx: usize) -> String {
+    ops.get(idx).map_or("?".to_string(), fmt_operand)
+}
+
+fn mnemonic_to_c_op(m: &str) -> &str {
+    match m {
+        "add" | "adds" | "adc" | "adcs" | "cmn" => "+",
+        "sub" | "subs" | "sbc" | "sbcs" | "cmp" | "neg" | "negs" => "-",
+        "and" | "ands" | "tst" => "&",
+        "orr" => "|",
+        "eor" => "^",
+        "orn" => "|~",
+        "eon" => "^~",
+        "bic" | "bics" => "&~",
+        "lsl" | "lslv" => "<<",
+        "lsr" | "lsrv" => ">>",
+        "asr" | "asrv" => ">>",
+        "ror" | "rorv" => "ror",
+        "mul" => "*",
+        _ => m,
+    }
+}
+
+fn fallback_expr(m: &str, ops: &[Operand]) -> String {
+    if ops.is_empty() {
+        return m.to_string();
+    }
+    if ops.len() == 1 {
+        return format!("{}({})", m, fmt_operand(&ops[0]));
+    }
+    format!(
+        "{} = {}({})",
+        fmt_operand(&ops[0]),
+        m,
+        ops[1..].iter().map(fmt_operand).collect::<Vec<_>>().join(", ")
+    )
+}
+
+fn mem_type_str(m: &str, elem_width: u8) -> &'static str {
+    if m.starts_with("ldrsw") {
+        return "(int64_t)*(int32_t*)";
+    }
+    if m.starts_with("ldrsh") {
+        return if elem_width == 8 {
+            "(int64_t)*(int16_t*)"
+        } else {
+            "(int32_t)*(int16_t*)"
+        };
+    }
+    if m.starts_with("ldrsb") {
+        return if elem_width == 8 {
+            "(int64_t)*(int8_t*)"
+        } else {
+            "(int32_t)*(int8_t*)"
+        };
+    }
+    match elem_width {
+        1 => "uint8_t",
+        2 => "uint16_t",
+        4 => "uint32_t",
+        8 => "uint64_t",
+        16 => "uint128_t",
+        _ => "uint64_t",
+    }
+}
+
+fn fmt_addr(addr: u64) -> String {
+    format!("0x{:x}", addr)
+}
+
+// ─── 主函数：ARM64 指令 → C 伪代码字符串 ────────────────────────────────────
+
+fn to_c_expr(class: InsnClass, p: &ParsedLine) -> String {
+    let ops = &p.operands;
+    let m = p.mnemonic.as_str();
+
+    match class {
+        // ALU
+        InsnClass::AluReg | InsnClass::AluImm | InsnClass::AluShift => {
+            let c_op = mnemonic_to_c_op(m);
+            if c_op == "ror" {
+                format!("{} = ror({}, {})", op(ops, 0), op(ops, 1), op(ops, 2))
+            } else if c_op == "|~" || c_op == "^~" || c_op == "&~" {
+                let base_op = &c_op[..1];
+                format!(
+                    "{} = {} {} ~{}",
+                    op(ops, 0),
+                    op(ops, 1),
+                    base_op,
+                    op(ops, 2)
+                )
+            } else if m == "neg" || m == "negs" {
+                format!("{} = -{}", op(ops, 0), op(ops, 1))
+            } else if m == "mvn" {
+                format!("{} = ~{}", op(ops, 0), op(ops, 1))
+            } else if ops.len() >= 3 {
+                format!(
+                    "{} = {} {} {}",
+                    op(ops, 0),
+                    op(ops, 1),
+                    c_op,
+                    op(ops, 2)
+                )
+            } else if ops.len() == 2 {
+                format!("{} = {} {}", op(ops, 0), c_op, op(ops, 1))
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+
+        // Multiply
+        InsnClass::Multiply => match m {
+            "mul" => format!("{} = {} * {}", op(ops, 0), op(ops, 1), op(ops, 2)),
+            "madd" => format!(
+                "{} = {} * {} + {}",
+                op(ops, 0),
+                op(ops, 1),
+                op(ops, 2),
+                op(ops, 3)
+            ),
+            "msub" => format!(
+                "{} = {} - {} * {}",
+                op(ops, 0),
+                op(ops, 3),
+                op(ops, 1),
+                op(ops, 2)
+            ),
+            "mneg" => format!("{} = -({} * {})", op(ops, 0), op(ops, 1), op(ops, 2)),
+            "smull" | "umull" => format!(
+                "{} = ({}){} * ({}){} ",
+                op(ops, 0),
+                if m == "smull" { "int64_t" } else { "uint64_t" },
+                op(ops, 1),
+                if m == "smull" { "int32_t" } else { "uint32_t" },
+                op(ops, 2)
+            ),
+            "smaddl" | "umaddl" => format!(
+                "{} = {} * {} + {}",
+                op(ops, 0),
+                op(ops, 1),
+                op(ops, 2),
+                op(ops, 3)
+            ),
+            "smsubl" | "umsubl" => format!(
+                "{} = {} - {} * {}",
+                op(ops, 0),
+                op(ops, 3),
+                op(ops, 1),
+                op(ops, 2)
+            ),
+            "smulh" | "umulh" => {
+                format!("{} = mulhi({}, {})", op(ops, 0), op(ops, 1), op(ops, 2))
+            }
+            _ => fallback_expr(m, ops),
+        },
+
+        // Move
+        InsnClass::Move => {
+            format!("{} = {}", op(ops, 0), op(ops, 1))
+        }
+
+        // ScalarRMW
+        InsnClass::ScalarRMW => fallback_expr(m, ops),
+
+        // FlagSet
+        InsnClass::FlagSet => {
+            let c_op = mnemonic_to_c_op(m);
+            if m == "tst" {
+                format!("nzcv = {} & {}", op(ops, 0), op(ops, 1))
+            } else {
+                format!("nzcv = {} {} {}", op(ops, 0), c_op, op(ops, 1))
+            }
+        }
+
+        // CondFlagSet
+        InsnClass::CondFlagSet => {
+            let c_op = if m.starts_with("ccmn") { "+" } else { "-" };
+            format!("if (cond) nzcv = {} {} {}", op(ops, 0), c_op, op(ops, 1))
+        }
+
+        // AluFlags
+        InsnClass::AluFlags => {
+            let c_op = mnemonic_to_c_op(m);
+            if m == "neg" || m == "negs" {
+                format!("{} = -{}; nzcv = ...", op(ops, 0), op(ops, 1))
+            } else {
+                format!(
+                    "{} = {} {} {}; nzcv = ...",
+                    op(ops, 0),
+                    op(ops, 1),
+                    c_op,
+                    op(ops, 2)
+                )
+            }
+        }
+
+        // FlagUse
+        InsnClass::FlagUse => match m {
+            "csel" | "fcsel" => format!(
+                "{} = (cond) ? {} : {}",
+                op(ops, 0),
+                op(ops, 1),
+                op(ops, 2)
+            ),
+            "cset" => format!("{} = (cond) ? 1 : 0", op(ops, 0)),
+            "csetm" => format!("{} = (cond) ? -1 : 0", op(ops, 0)),
+            "csinc" => format!(
+                "{} = (cond) ? {} : {} + 1",
+                op(ops, 0),
+                op(ops, 1),
+                op(ops, 2)
+            ),
+            "csinv" => format!(
+                "{} = (cond) ? {} : ~{}",
+                op(ops, 0),
+                op(ops, 1),
+                op(ops, 2)
+            ),
+            "csneg" => format!(
+                "{} = (cond) ? {} : -{}",
+                op(ops, 0),
+                op(ops, 1),
+                op(ops, 2)
+            ),
+            "cinc" => format!(
+                "{} = (cond) ? {} + 1 : {}",
+                op(ops, 0),
+                op(ops, 1),
+                op(ops, 1)
+            ),
+            "cinv" => format!(
+                "{} = (cond) ? ~{} : {}",
+                op(ops, 0),
+                op(ops, 1),
+                op(ops, 1)
+            ),
+            "cneg" => format!(
+                "{} = (cond) ? -{} : {}",
+                op(ops, 0),
+                op(ops, 1),
+                op(ops, 1)
+            ),
+            _ => fallback_expr(m, ops),
+        },
+
+        // AluCarry
+        InsnClass::AluCarry => {
+            let c_op = mnemonic_to_c_op(m);
+            format!(
+                "{} = {} {} {} {} C",
+                op(ops, 0),
+                op(ops, 1),
+                c_op,
+                op(ops, 2),
+                c_op
+            )
+        }
+
+        // AluCarryFlags
+        InsnClass::AluCarryFlags => {
+            let c_op = mnemonic_to_c_op(m);
+            format!(
+                "{} = {} {} {} {} C; nzcv = ...",
+                op(ops, 0),
+                op(ops, 1),
+                c_op,
+                op(ops, 2),
+                c_op
+            )
+        }
+
+        // LoadReg
+        InsnClass::LoadReg => {
+            if let Some(ref mem) = p.mem_op {
+                let ty = mem_type_str(m, mem.elem_width);
+                let addr = fmt_addr(mem.abs);
+                if ty.starts_with('(') {
+                    format!("{} = {}{}", op(ops, 0), ty, addr)
+                } else {
+                    format!("{} = *({}*){}", op(ops, 0), ty, addr)
+                }
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+
+        // LoadPair
+        InsnClass::LoadPair => {
+            if let Some(ref mem) = p.mem_op {
+                let addr = fmt_addr(mem.abs);
+                format!("{{{}, {}}} = *(uint128_t*){}", op(ops, 0), op(ops, 1), addr)
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+
+        // StoreReg
+        InsnClass::StoreReg => {
+            if let Some(ref mem) = p.mem_op {
+                let ty = mem_type_str(m, mem.elem_width);
+                let addr = fmt_addr(mem.abs);
+                format!("*({}*){} = {}", ty, addr, op(ops, 0))
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+
+        // StorePair
+        InsnClass::StorePair => {
+            if let Some(ref mem) = p.mem_op {
+                let addr = fmt_addr(mem.abs);
+                format!("*(uint128_t*){} = {{{}, {}}}", addr, op(ops, 0), op(ops, 1))
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+
+        // StoreExcl
+        InsnClass::StoreExcl => {
+            if let Some(ref mem) = p.mem_op {
+                format!(
+                    "{} = stxr({}, {})",
+                    op(ops, 0),
+                    fmt_addr(mem.abs),
+                    op(ops, 1)
+                )
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+
+        // AtomicLoadOp
+        InsnClass::AtomicLoadOp => {
+            let atomic_op = if m.contains("add") {
+                "atomic_add"
+            } else if m.contains("clr") {
+                "atomic_clr"
+            } else if m.contains("set") {
+                "atomic_set"
+            } else if m.contains("eor") {
+                "atomic_eor"
+            } else if m.starts_with("swp") {
+                "atomic_swap"
+            } else {
+                "atomic_op"
+            };
+            if let Some(ref mem) = p.mem_op {
+                format!(
+                    "{} = {}({}, {})",
+                    op(ops, 1),
+                    atomic_op,
+                    fmt_addr(mem.abs),
+                    op(ops, 0)
+                )
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+
+        // CompareAndSwap
+        InsnClass::CompareAndSwap => {
+            if let Some(ref mem) = p.mem_op {
+                format!(
+                    "{} = cas({}, {}, {})",
+                    op(ops, 0),
+                    fmt_addr(mem.abs),
+                    op(ops, 0),
+                    op(ops, 1)
+                )
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+
+        // Branch variants（依赖树中少见）
+        InsnClass::CondBranchNzcv
+        | InsnClass::CondBranchReg
+        | InsnClass::Branch
+        | InsnClass::BranchLink
+        | InsnClass::BranchReg
+        | InsnClass::BranchLinkReg
+        | InsnClass::Return => fallback_expr(m, ops),
+
+        // Nop/Svc
+        InsnClass::Nop | InsnClass::Svc => fallback_expr(m, ops),
+
+        // SysReg
+        InsnClass::SysRegRead => format!("{} = mrs(sysreg)", op(ops, 0)),
+        InsnClass::SysRegNzcvRead => format!("{} = nzcv", op(ops, 0)),
+        InsnClass::SysRegWrite => format!("msr(sysreg) = {}", op(ops, 0)),
+        InsnClass::SysRegNzcvWrite => format!("nzcv = {}", op(ops, 0)),
+
+        // SIMD
+        InsnClass::SimdArith
+        | InsnClass::SimdRMW
+        | InsnClass::SimdMove
+        | InsnClass::SimdMisc
+        | InsnClass::SimdLaneLoad => fallback_expr(m, ops),
+        InsnClass::SimdLoad => {
+            if let Some(ref mem) = p.mem_op {
+                format!("{} = *(uint128_t*){}", op(ops, 0), fmt_addr(mem.abs))
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+        InsnClass::SimdStore => {
+            if let Some(ref mem) = p.mem_op {
+                format!("*(uint128_t*){} = {}", fmt_addr(mem.abs), op(ops, 0))
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+
+        // Float
+        InsnClass::FloatArith => {
+            let stripped = m.trim_start_matches('f');
+            let c_op = mnemonic_to_c_op(stripped);
+            if c_op != stripped && ops.len() >= 3 {
+                format!(
+                    "{} = {} {} {}",
+                    op(ops, 0),
+                    op(ops, 1),
+                    c_op,
+                    op(ops, 2)
+                )
+            } else if m == "fneg" {
+                format!("{} = -{}", op(ops, 0), op(ops, 1))
+            } else if m == "fabs" {
+                format!("{} = fabs({})", op(ops, 0), op(ops, 1))
+            } else if m == "fsqrt" {
+                format!("{} = sqrt({})", op(ops, 0), op(ops, 1))
+            } else if m == "fmadd" {
+                format!(
+                    "{} = {} * {} + {}",
+                    op(ops, 0),
+                    op(ops, 1),
+                    op(ops, 2),
+                    op(ops, 3)
+                )
+            } else if m == "fmsub" {
+                format!(
+                    "{} = {} - {} * {}",
+                    op(ops, 0),
+                    op(ops, 3),
+                    op(ops, 1),
+                    op(ops, 2)
+                )
+            } else if m == "fcmp" || m == "fcmpe" {
+                format!("nzcv = {} - {}", op(ops, 0), op(ops, 1))
+            } else {
+                fallback_expr(m, ops)
+            }
+        }
+
+        // Bitfield
+        InsnClass::Bitfield => match m {
+            "ubfx" | "ubfiz" => {
+                if let (Some(Operand::Imm(lsb)), Some(Operand::Imm(width))) =
+                    (ops.get(2), ops.get(3))
+                {
+                    let mask = (1u64 << width) - 1;
+                    if m == "ubfx" {
+                        format!(
+                            "{} = ({} >> {}) & 0x{:x}",
+                            op(ops, 0),
+                            op(ops, 1),
+                            lsb,
+                            mask
+                        )
+                    } else {
+                        format!(
+                            "{} = ({} & 0x{:x}) << {}",
+                            op(ops, 0),
+                            op(ops, 1),
+                            mask,
+                            lsb
+                        )
+                    }
+                } else {
+                    fallback_expr(m, ops)
+                }
+            }
+            "sbfx" => {
+                if let (Some(Operand::Imm(lsb)), Some(Operand::Imm(width))) =
+                    (ops.get(2), ops.get(3))
+                {
+                    format!(
+                        "{} = sign_ext(({} >> {}) & 0x{:x}, {})",
+                        op(ops, 0),
+                        op(ops, 1),
+                        lsb,
+                        (1u64 << width) - 1,
+                        width
+                    )
+                } else {
+                    fallback_expr(m, ops)
+                }
+            }
+            _ => fallback_expr(m, ops),
+        },
+
+        // Extend
+        InsnClass::Extend => match m {
+            "sxtw" => format!("{} = (int64_t)(int32_t){}", op(ops, 0), op(ops, 1)),
+            "sxth" => format!("{} = (int64_t)(int16_t){}", op(ops, 0), op(ops, 1)),
+            "sxtb" => format!("{} = (int64_t)(int8_t){}", op(ops, 0), op(ops, 1)),
+            "uxtw" => format!("{} = (uint32_t){}", op(ops, 0), op(ops, 1)),
+            "uxth" => format!("{} = (uint16_t){}", op(ops, 0), op(ops, 1)),
+            "uxtb" => format!("{} = (uint8_t){}", op(ops, 0), op(ops, 1)),
+            _ => fallback_expr(m, ops),
+        },
     }
 }
