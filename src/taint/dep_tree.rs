@@ -759,7 +759,8 @@ fn to_c_expr(class: InsnClass, p: &ParsedLine) -> String {
                 if let (Some(Operand::Imm(lsb)), Some(Operand::Imm(width))) =
                     (ops.get(2), ops.get(3))
                 {
-                    let mask = (1u64 << width) - 1;
+                    let w = (*width).clamp(1, 63) as u64;
+                    let mask = (1u64 << w) - 1;
                     if m == "ubfx" {
                         format!(
                             "{} = ({} >> {}) & 0x{:x}",
@@ -785,12 +786,13 @@ fn to_c_expr(class: InsnClass, p: &ParsedLine) -> String {
                 if let (Some(Operand::Imm(lsb)), Some(Operand::Imm(width))) =
                     (ops.get(2), ops.get(3))
                 {
+                    let w = (*width).clamp(1, 63) as u64;
                     format!(
                         "{} = sign_ext(({} >> {}) & 0x{:x}, {})",
                         op(ops, 0),
                         op(ops, 1),
                         lsb,
-                        (1u64 << width) - 1,
+                        (1u64 << w) - 1,
                         width
                     )
                 } else {
