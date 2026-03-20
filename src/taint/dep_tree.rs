@@ -3,7 +3,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::flat::line_index::LineIndexView;
 use crate::flat::scan_view::ScanView;
-use crate::taint::def_use::determine_def_use;
 use crate::taint::gumtrace_parser;
 use crate::taint::insn_class;
 use crate::taint::insn_class::InsnClass;
@@ -188,36 +187,11 @@ fn fill_node_info(
             };
             if let Some(ref p) = parsed {
                 let cls = insn_class::classify_and_refine(p);
-                let (defs, uses) = determine_def_use(cls, p);
                 node.operation = p.mnemonic.to_string();
-
-                let def_str = defs
-                    .iter()
-                    .map(|r| format!("{:?}", r))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let use_str = uses
-                    .iter()
-                    .map(|r| format!("{:?}", r))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let changes = extract_changes(line_str);
-
-                if p.mem_op.is_some() {
-                    let mem = p.mem_op.as_ref().unwrap();
-                    if mem.is_write {
-                        node.expression = format!("mem[0x{:x}] = {}", mem.abs, use_str);
-                    } else {
-                        node.expression = format!("{} = mem[0x{:x}]", def_str, mem.abs);
-                    }
-                } else if !def_str.is_empty() {
-                    node.expression = format!("{} = {} {}", def_str, p.mnemonic, use_str);
-                } else {
-                    node.expression = format!("{} {}", p.mnemonic, use_str);
-                }
-
+                node.expression = to_c_expr(cls, p);
                 node.asm = extract_asm(line_str, format);
 
+                let changes = extract_changes(line_str);
                 if node.is_leaf && !changes.is_empty() {
                     node.value = Some(changes);
                 }
