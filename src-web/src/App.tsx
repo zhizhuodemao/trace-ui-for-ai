@@ -737,6 +737,11 @@ function App() {
       handleJumpToSeqRef.current(e.payload.seq);
     }));
 
+    // 依赖树窗口请求跳转到指定行
+    unlisteners.push(listen<{ sessionId: string; seq: number }>("dep-tree:jump-to-seq", (e) => {
+      handleJumpToSeqRef.current(e.payload.seq);
+    }));
+
     // 浮动搜索窗口同步搜索结果回主窗口
     unlisteners.push(listen<{ results: SearchMatch[]; query: string; status: string; totalMatches: number }>("sync:search-results-back", (e) => {
       syncSearchStateRef.current(e.payload.results, e.payload.query, e.payload.status, e.payload.totalMatches);

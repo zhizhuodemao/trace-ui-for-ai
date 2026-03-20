@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import type { TraceLine, CallTreeNodeDto, DefUseChain } from "../types/trace";
+import type { TraceLine, CallTreeNodeDto, DefUseChain, DependencyNode } from "../types/trace";
 import type { HighlightInfo } from "../hooks/useHighlights";
 import { useResizableColumn } from "../hooks/useResizableColumn";
 import type { useFoldState, ResolvedRow } from "../hooks/useFoldState";
@@ -1067,6 +1067,31 @@ export default function TraceTable({
     });
   }, []);
 
+  // 打开依赖树浮动窗口
+  const openDepTreeWindow = useCallback(async (seq: number, target: string) => {
+    if (!sessionId) return;
+    try {
+      const tree = await invoke<DependencyNode>("build_dependency_tree", {
+        sessionId, seq, target: `reg:${target}`, dataOnly: false,
+      });
+      const winLabel = `panel-dep-tree-${Date.now()}`;
+      const unlisten = await listen(`dep-tree:ready:${winLabel}`, () => {
+        emitTo(winLabel, "dep-tree:init-data", { tree, sessionId });
+        unlisten();
+      });
+      new WebviewWindow(winLabel, {
+        url: `index.html?panel=dep-tree`,
+        title: "Dependency Tree",
+        width: 800,
+        height: 600,
+        decorations: false,
+        transparent: true,
+      });
+    } catch (e) {
+      console.error("build_dependency_tree failed:", e);
+    }
+  }, [sessionId]);
+
   // === Canvas 点击 ===
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
     const container = containerRef.current;
@@ -1490,6 +1515,32 @@ export default function TraceTable({
     if (selectedSeq != null) return [selectedSeq];
     return [];
   }, [multiSelect, ctrlSelect, selectedSeq, finalResolveVirtualIndex]);
+
+  // 右键菜单：查看依赖树（获取 DEF 寄存器并打开）
+  const handleDepTreeFromMenu = useCallback(async () => {
+    const seqs = getSelectedSeqs();
+    if (seqs.length === 0 || !sessionId) return;
+    const seq = seqs[0];
+    // 如果右键命中了某个寄存器，直接用它
+    const hitReg = ctxRegRef.current;
+    if (hitReg) {
+      openDepTreeWindow(seq, hitReg);
+      return;
+    }
+    // 否则查询该行 DEF 寄存器
+    try {
+      const defs = await invoke<string[]>("get_line_def_registers", { sessionId, seq });
+      if (defs.length === 0) return;
+      if (defs.length === 1) {
+        openDepTreeWindow(seq, defs[0]);
+      } else {
+        // 多个 DEF 寄存器：用第一个（后续可扩展为子菜单选择）
+        openDepTreeWindow(seq, defs[0]);
+      }
+    } catch (e) {
+      console.error("get_line_def_registers failed:", e);
+    }
+  }, [sessionId, getSelectedSeqs, openDepTreeWindow]);
 
   // === 复制辅助 ===
   const getSelectedLines = useCallback(async (): Promise<TraceLine[]> => {
@@ -2762,6 +2813,21 @@ export default function TraceTable({
                       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                       style={{ padding: "6px 12px", fontSize: 12, color: "var(--text-primary)", cursor: "pointer", whiteSpace: "nowrap" }}
                     >Taint Trace</div>
+                  </>
+                )}
+                {/* 查看依赖树 */}
+                {sessionId && (
+                  <>
+                    <ContextMenuSeparator />
+                    <div
+                      onClick={() => {
+                        handleDepTreeFromMenu();
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-selected)"; setHighlightSubmenuOpen(false); }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                      style={{ padding: "6px 12px", fontSize: 12, color: "var(--text-primary)", cursor: "pointer", whiteSpace: "nowrap" }}
+                    >查看依赖树</div>
                   </>
                 )}
               </>

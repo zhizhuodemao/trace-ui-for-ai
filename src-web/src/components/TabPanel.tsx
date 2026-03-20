@@ -1,8 +1,10 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emitTo } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { cleanupListener } from "../utils/tauriEvents";
 import { useDragToFloat } from "../hooks/useDragToFloat";
-import type { SearchMatch, SliceResult } from "../types/trace";
+import type { SearchMatch, SliceResult, DependencyNode } from "../types/trace";
 import MemoryPanel from "./MemoryPanel";
 import SearchResultList from "./SearchResultList";
 import SearchBar, { SearchOptions } from "./SearchBar";
@@ -315,6 +317,42 @@ export default function TabPanel({
                 <span style={{ color: "var(--text-primary)" }}>{(sliceDuration / 1000).toFixed(2)}s</span>
               </div>
             )}
+            <div style={{ marginTop: 4 }}>
+              <button
+                onClick={async () => {
+                  if (!sessionId) return;
+                  try {
+                    const tree = await invoke<DependencyNode>("build_dependency_tree_from_slice", { sessionId });
+                    const winLabel = `panel-dep-tree-${Date.now()}`;
+                    const unlisten = await listen(`dep-tree:ready:${winLabel}`, () => {
+                      emitTo(winLabel, "dep-tree:init-data", { tree, sessionId });
+                      unlisten();
+                    });
+                    new WebviewWindow(winLabel, {
+                      url: `index.html?panel=dep-tree`,
+                      title: "Dependency Tree",
+                      width: 800,
+                      height: 600,
+                      decorations: false,
+                      transparent: true,
+                    });
+                  } catch (e) {
+                    console.error("build_dependency_tree_from_slice failed:", e);
+                  }
+                }}
+                style={{
+                  padding: "3px 10px",
+                  fontSize: 11,
+                  background: "var(--btn-secondary, #3e4451)",
+                  color: "var(--text-primary)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                以依赖树查看
+              </button>
+            </div>
           </div>
         ) : (
           <div style={{ width: "100%", textAlign: "center" }}>
