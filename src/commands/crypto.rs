@@ -1,6 +1,9 @@
 use serde::Serialize;
 use tauri::State;
 use crate::state::AppState;
+use crate::taint::types::TraceFormat;
+use crate::commands::browse::{parse_trace_line, parse_trace_line_gumtrace};
+use crate::commands::utils::ascii_contains;
 
 /// 28 crypto algorithms with their magic number constants.
 /// Each entry: (algorithm_name, &[magic_u32_values])
@@ -66,16 +69,6 @@ fn build_needles() -> Vec<(&'static str, String, Vec<u8>)> {
     needles
 }
 
-/// Case-insensitive ASCII substring match (replicates search.rs ascii_contains)
-#[inline]
-fn ascii_contains(haystack: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() { return true; }
-    if needle.len() > haystack.len() { return false; }
-    haystack.windows(needle.len()).any(|window| {
-        window.iter().zip(needle).all(|(h, n)| h.to_ascii_lowercase() == *n)
-    })
-}
-
 /// Scan a chunk of the trace file for crypto magic numbers.
 fn scan_chunk(
     data: &[u8],
@@ -83,10 +76,11 @@ fn scan_chunk(
     end_seq: u32,
     start_offset: usize,
     needles: &[(&str, String, Vec<u8>)],
-    trace_format: crate::taint::types::TraceFormat,
-    max_matches: usize,
+    trace_format: TraceFormat,
 ) -> Vec<CryptoMatch> {
-    let mut matches = Vec::new();
+    // 粗估 0.5% 匹配率预分配，减少运行时 Vec 扩容
+    let estimated = end_seq.saturating_sub(start_seq) as usize / 200;
+    let mut matches = Vec::with_capacity(estimated);
     let mut pos = start_offset;
     let mut seq = start_seq;
 
@@ -99,23 +93,19 @@ fn scan_chunk(
 
         for (algo, hex_display, needle) in needles {
             if ascii_contains(line, needle) {
-                if matches.len() < max_matches {
-                    let parsed = match trace_format {
-                        crate::taint::types::TraceFormat::Unidbg =>
-                            crate::commands::browse::parse_trace_line(seq, line),
-                        crate::taint::types::TraceFormat::Gumtrace =>
-                            crate::commands::browse::parse_trace_line_gumtrace(seq, line),
-                    };
-                    if let Some(p) = parsed {
-                        matches.push(CryptoMatch {
-                            algorithm: algo.to_string(),
-                            magic_hex: hex_display.clone(),
-                            seq,
-                            address: p.address,
-                            disasm: p.disasm,
-                            changes: p.changes,
-                        });
-                    }
+                let parsed = match trace_format {
+                    TraceFormat::Unidbg => parse_trace_line(seq, line),
+                    TraceFormat::Gumtrace => parse_trace_line_gumtrace(seq, line),
+                };
+                if let Some(p) = parsed {
+                    matches.push(CryptoMatch {
+                        algorithm: algo.to_string(),
+                        magic_hex: hex_display.clone(),
+                        seq,
+                        address: p.address,
+                        disasm: p.disasm,
+                        changes: p.changes,
+                    });
                 }
                 break; // one match per line is enough
             }
@@ -170,25 +160,18 @@ pub async fn scan_crypto(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let data: &[u8] = &mmap_arc;
         let needles = build_needles();
-        let max_total = 10000usize;
 
         let all_matches = if let Some(chunks) = chunks {
             use rayon::prelude::*;
             let chunk_results: Vec<Vec<CryptoMatch>> = chunks.par_iter()
                 .map(|&(start_seq, end_seq, start_offset)| {
-                    scan_chunk(data, start_seq, end_seq, start_offset, &needles, trace_format, max_total)
+                    scan_chunk(data, start_seq, end_seq, start_offset, &needles, trace_format)
                 })
                 .collect();
 
-            let mut all = Vec::new();
-            for chunk_matches in chunk_results {
-                if all.len() >= max_total { break; }
-                let remaining = max_total - all.len();
-                all.extend(chunk_matches.into_iter().take(remaining));
-            }
-            all
+            chunk_results.into_iter().flatten().collect()
         } else {
-            scan_chunk(data, 0, total_lines, 0, &needles, trace_format, max_total)
+            scan_chunk(data, 0, total_lines, 0, &needles, trace_format)
         };
 
         // Collect unique algorithms found

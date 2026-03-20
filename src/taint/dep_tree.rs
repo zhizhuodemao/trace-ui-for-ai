@@ -27,6 +27,7 @@ pub struct DependencyGraph {
 pub struct NodeInfo {
     pub seq: u32,
     pub expression: String,
+    pub asm: String,           // 新增：原始汇编文本
     pub operation: String,
     pub is_leaf: bool,
     pub value: Option<String>,
@@ -48,7 +49,6 @@ pub fn build_graph(view: &ScanView, start_index: u32, data_only: bool, max_nodes
     let mut edge_set: HashSet<u64> = HashSet::new();
     let mut depth_map: HashMap<u32, u32> = HashMap::new();
     let mut children_exist: HashSet<u32> = HashSet::new();
-    let mut total_reachable: u32 = 0;
     let mut collecting = true; // 是否仍在收集节点（未超限）
 
     let root_line = start_index & LINE_MASK;
@@ -67,7 +67,7 @@ pub fn build_graph(view: &ScanView, start_index: u32, data_only: bool, max_nodes
     node_seqs.push(root_line);
     node_set.insert(root_line);
     depth_map.insert(root_line, 0);
-    total_reachable = 1;
+    let mut total_reachable: u32 = 1;
 
     while let Some(raw) = queue.pop_front() {
         let parent_line = raw & LINE_MASK;
@@ -142,6 +142,7 @@ pub fn build_graph(view: &ScanView, start_index: u32, data_only: bool, max_nodes
         .map(|&seq| NodeInfo {
             seq,
             expression: String::new(),
+            asm: String::new(),
             operation: String::new(),
             is_leaf: !children_exist.contains(&seq),
             value: None,

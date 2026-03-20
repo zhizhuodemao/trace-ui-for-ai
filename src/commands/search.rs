@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use crate::state::AppState;
 use crate::commands::browse::CallInfoDto;
+use crate::commands::utils::ascii_contains;
 
 #[derive(Deserialize)]
 pub struct SearchRequest {
@@ -78,20 +79,6 @@ fn parse_search_mode(query: &str, case_sensitive: bool, use_regex: bool, fuzzy: 
         // 默认：整体子串匹配（含空格）
         Ok(SearchMode::TextInsensitive(query.to_lowercase().into_bytes()))
     }
-}
-
-/// 零分配 ASCII 大小写不敏感子串搜索
-#[inline]
-fn ascii_contains(haystack: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    if needle.len() > haystack.len() {
-        return false;
-    }
-    haystack.windows(needle.len()).any(|window| {
-        window.iter().zip(needle).all(|(h, n)| h.to_ascii_lowercase() == *n)
-    })
 }
 
 /// 零分配多关键词模糊匹配

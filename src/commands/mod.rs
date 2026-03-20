@@ -12,3 +12,4 @@ pub mod registers;
 pub mod search;
 pub mod slice;
 pub mod strings;
+pub mod utils;
