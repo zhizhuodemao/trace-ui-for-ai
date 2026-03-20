@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import { emit } from "@tauri-apps/api/event";
 import type { DependencyNode } from "../../types/trace";
 
@@ -19,9 +19,10 @@ interface TreeNodeProps {
   node: DependencyNode;
   sessionId: string;
   defaultExpandDepth: number;
+  scrollContainer: React.RefObject<HTMLDivElement | null>;
 }
 
-function TreeNode({ node, sessionId, defaultExpandDepth }: TreeNodeProps) {
+function TreeNode({ node, sessionId, defaultExpandDepth, scrollContainer }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(node.depth < defaultExpandDepth);
   const hasChildren = node.children.length > 0;
   const color = getDepthColor(node.depth);
@@ -32,12 +33,26 @@ function TreeNode({ node, sessionId, defaultExpandDepth }: TreeNodeProps) {
   }, []);
 
   const handleClick = useCallback(() => {
-    emit("dep-tree:jump-to-seq", { sessionId, seq: node.seq });
-  }, [sessionId, node.seq]);
+    if (node.isRef) {
+      // 点击 ref 节点：滚动到完整展开的位置并闪烁高亮
+      const container = scrollContainer.current;
+      if (!container) return;
+      const target = container.querySelector(`[data-expanded-seq="${node.seq}"]`) as HTMLElement | null;
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.style.background = "rgba(97, 175, 239, 0.25)";
+        setTimeout(() => { target.style.background = "transparent"; }, 1500);
+      }
+    } else {
+      emit("dep-tree:jump-to-seq", { sessionId, seq: node.seq });
+    }
+  }, [sessionId, node.seq, node.isRef, scrollContainer]);
 
   return (
     <div style={{ marginLeft: node.depth > 0 ? 16 : 0 }}>
       <div
+        // 非 ref 节点标记为锚点，供 ref 节点跳转
+        {...(!node.isRef ? { "data-expanded-seq": String(node.seq) } : {})}
         onClick={handleClick}
         style={{
           display: "flex",
@@ -48,6 +63,7 @@ function TreeNode({ node, sessionId, defaultExpandDepth }: TreeNodeProps) {
           fontSize: 12,
           fontFamily: '"JetBrains Mono", "Fira Code", monospace',
           gap: 6,
+          transition: "background 0.3s",
         }}
         onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover, rgba(255,255,255,0.05))"; }}
         onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
@@ -97,8 +113,9 @@ function TreeNode({ node, sessionId, defaultExpandDepth }: TreeNodeProps) {
             color: "#61afef",
             fontSize: 10,
             flexShrink: 0,
+            cursor: "pointer",
           }}>
-            → 已在上方展开
+            → 点击定位
           </span>
         )}
 
@@ -141,6 +158,7 @@ function TreeNode({ node, sessionId, defaultExpandDepth }: TreeNodeProps) {
               node={child}
               sessionId={sessionId}
               defaultExpandDepth={defaultExpandDepth}
+              scrollContainer={scrollContainer}
             />
           ))}
         </div>
@@ -155,13 +173,18 @@ interface ExpressionTreeViewProps {
 }
 
 export default function ExpressionTreeView({ tree, sessionId }: ExpressionTreeViewProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
   return (
-    <div style={{
-      flex: 1,
-      overflow: "auto",
-      padding: "4px 0",
-    }}>
-      <TreeNode node={tree} sessionId={sessionId} defaultExpandDepth={4} />
+    <div
+      ref={containerRef}
+      style={{
+        flex: 1,
+        overflow: "auto",
+        padding: "4px 0",
+      }}
+    >
+      <TreeNode node={tree} sessionId={sessionId} defaultExpandDepth={4} scrollContainer={containerRef} />
     </div>
   );
 }
