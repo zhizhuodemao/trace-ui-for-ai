@@ -15,6 +15,7 @@ pub struct TraceLine {
     pub seq: u32,
     pub address: String,
     pub so_offset: String,
+    pub so_name: Option<String>,
     pub disasm: String,
     pub changes: String,
     pub reg_before: String,
@@ -29,7 +30,7 @@ pub struct TraceLine {
 pub fn parse_trace_line(seq: u32, raw: &[u8]) -> Option<TraceLine> {
     let line = std::str::from_utf8(raw).ok()?;
 
-    let so_offset = extract_so_offset(line);
+    let (so_offset, so_name) = extract_so_info(line);
     let address = extract_address(line);
     let disasm = extract_disasm(line);
     let mem_rw = extract_mem_rw(line);
@@ -42,6 +43,7 @@ pub fn parse_trace_line(seq: u32, raw: &[u8]) -> Option<TraceLine> {
         seq,
         address,
         so_offset,
+        so_name,
         disasm,
         changes,
         reg_before,
@@ -71,15 +73,17 @@ pub fn parse_trace_line_gumtrace(seq: u32, raw: &[u8]) -> Option<TraceLine> {
 
     // [module] 0xABS!0xOFFSET instruction...
     let bracket_end = line.find("] ")?;
+    let so_name = Some(line[1..bracket_end].to_string());
     let rest = &line[bracket_end + 2..];
 
-    // Address: 0xABS!0xOFFSET — 显示偏移地址
+    // Address: 0xABS!0xOFFSET — 绝对地址!偏移地址
     let bang = rest.find('!')?;
 
+    let abs_end = bang;
+    let address = &rest[..abs_end]; // 绝对地址
     let offset_start = bang + 1;
     let offset_end = rest[offset_start..].find(' ').map(|p| offset_start + p).unwrap_or(rest.len());
-    let address = &rest[offset_start..offset_end]; // 偏移地址
-    let so_offset = address; // 与 address 相同
+    let so_offset = &rest[offset_start..offset_end]; // 偏移地址
 
     // Instruction text
     let insn_start = if offset_end < rest.len() { offset_end + 1 } else { rest.len() };
@@ -127,6 +131,7 @@ pub fn parse_trace_line_gumtrace(seq: u32, raw: &[u8]) -> Option<TraceLine> {
         seq,
         address: address.to_string(),
         so_offset: so_offset.to_string(),
+        so_name,
         disasm,
         changes,
         reg_before,
@@ -179,7 +184,7 @@ fn extract_gumtrace_mem_addr(line: &str) -> Option<String> {
     None
 }
 
-fn extract_so_offset(line: &str) -> String {
+fn extract_so_info(line: &str) -> (String, Option<String>) {
     // 格式: [timestamp][libtiny.so 0x174250] [encoding] 0xADDR: ...
     // 找 "] [" 模式（module bracket 结束 + encoding bracket 开始之间）
     if let Some(pos) = line.find("] [") {
@@ -188,11 +193,13 @@ fn extract_so_offset(line: &str) -> String {
             let module_info = &line[bracket_start + 1..pos];
             // module_info = "libtiny.so 0x174250"
             if let Some(space_pos) = module_info.rfind(' ') {
-                return module_info[space_pos + 1..].to_string();
+                let so_name = module_info[..space_pos].to_string();
+                let offset = module_info[space_pos + 1..].to_string();
+                return (offset, Some(so_name));
             }
         }
     }
-    String::new()
+    (String::new(), None)
 }
 
 fn extract_address(line: &str) -> String {
@@ -367,6 +374,7 @@ pub fn get_lines(session_id: String, seqs: Vec<u32>, state: State<'_, AppState>)
             seq,
             address: String::new(),
             so_offset: String::new(),
+            so_name: None,
             disasm: format!("(line {} unparseable)", seq + 1),
             changes: String::new(),
             reg_before: String::new(),
@@ -397,6 +405,7 @@ mod tests {
         let result = parse_trace_line(42, raw).unwrap();
         assert_eq!(result.seq, 42);
         assert_eq!(result.so_offset, "0x174250");
+        assert_eq!(result.so_name, Some("libtiny.so".to_string()));
         assert_eq!(result.address, "0x40174250");
         assert_eq!(result.disasm, "stp x29, x30, [sp, #-0x60]!");
         assert_eq!(result.mem_rw, Some("W".to_string()));
@@ -431,9 +440,11 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_so_offset() {
+    fn test_extract_so_info() {
         let line = r#"[07:17:13 488][libtiny.so 0x174250] [fd7bbaa9] 0x40174250: "stp""#;
-        assert_eq!(extract_so_offset(line), "0x174250");
+        let (offset, so_name) = extract_so_info(line);
+        assert_eq!(offset, "0x174250");
+        assert_eq!(so_name, Some("libtiny.so".to_string()));
     }
 
     #[test]
