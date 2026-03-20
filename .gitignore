@@ -1,0 +1,35 @@
+# Rust
+target/
+Cargo.lock
+
+# Frontend
+src-web/node_modules/
+src-web/dist/
+src-web/.vite/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tauri generated
+gen/schemas/
+
+# Claude
+CLAUDE.md
+
+# Superpowers
+.superpowers/
+
+# Docs（仅允许 docs/images/）
+docs/*
+!docs/images/
+
+# Trace files
+*.trace
+trace-*.txt
