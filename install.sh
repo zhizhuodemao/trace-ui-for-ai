@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="zhizhuodemao/trace-ui-for-ai"
+REPO="zhizhuodemao/trace-cli"
 VERSION="v0.1.0"
 BIN_NAME="trace-cli"
 

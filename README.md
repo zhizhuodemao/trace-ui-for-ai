@@ -143,7 +143,7 @@ Patched output / 修改后输出：
 ### One-liner (recommended) / 一键安装（推荐）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zhizhuodemao/trace-ui-for-ai/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/zhizhuodemao/trace-cli/main/install.sh | bash
 ```
 
 Downloads a pre-built binary + example trace. No Rust needed.
