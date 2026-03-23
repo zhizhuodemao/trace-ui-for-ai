@@ -1,9 +1,7 @@
 use anyhow::{bail, Result};
-use rustc_hash::FxHashMap;
 
 use crate::core::slicer::bfs_slice_with_options;
 use crate::core::types::parse_reg;
-use crate::func_stats::compute_func_stats;
 use crate::session::Session;
 
 const MAX_LINES: usize = 50;
@@ -26,56 +24,6 @@ fn extract_module_name(data: &[u8]) -> String {
     "unknown".to_string()
 }
 
-pub fn print_overview(session: &Session) {
-    let data: &[u8] = &session.mmap;
-    let module_name = extract_module_name(data);
-    println!("Trace: {}  {} lines  unidbg", module_name, session.total_lines);
-    println!();
-
-    let stats = compute_func_stats(&session.call_tree);
-    let max_depth: u32 = 2;
-    let mut printed = 0usize;
-    let total_eligible = stats.iter().filter(|s| s.depth <= max_depth).count();
-
-    for s in &stats {
-        if s.depth > max_depth {
-            continue;
-        }
-        if printed >= MAX_LINES {
-            let remaining = total_eligible - printed;
-            if remaining > 0 {
-                println!("... {} more functions", remaining);
-            }
-            break;
-        }
-
-        let indent = "  ".repeat(s.depth as usize);
-        let loop_info = s.children.iter()
-            .filter(|(_, count)| *count > 1)
-            .map(|(_, count)| format!("loop:{}", count))
-            .collect::<Vec<_>>();
-        let loop_str = if loop_info.is_empty() {
-            String::new()
-        } else {
-            format!("  [{}]", loop_info.join(", "))
-        };
-
-        let addr_str = if s.func_addr != 0 {
-            format!("0x{:x}", s.func_addr)
-        } else {
-            "root".to_string()
-        };
-
-        println!(
-            "{}{}  {} insns  x{}{}",
-            indent, addr_str, s.insn_count,
-            s.children.len(),
-            loop_str
-        );
-        printed += 1;
-    }
-}
-
 pub fn print_lines(session: &Session, start: u32, end: u32) {
     let data: &[u8] = &session.mmap;
     let view = session.line_index_view();
@@ -95,7 +43,22 @@ pub fn print_lines(session: &Session, start: u32, end: u32) {
     }
 }
 
-pub fn print_taint(session: &Session, spec: &str, after: Option<u32>, data_only: bool, ignore_sp: bool) -> Result<()> {
+pub fn print_taint(session: &Session, spec: &str, range: Option<&str>, data_only: bool, ignore_sp: bool) -> Result<()> {
+    // Parse range if provided: "START-END"
+    let (range_start, range_end) = if let Some(r) = range {
+        let parts: Vec<&str> = r.splitn(2, '-').collect();
+        if parts.len() != 2 {
+            bail!("invalid range '{}': expected format 'START-END' (e.g. 3000-6000)", r);
+        }
+        let s: u32 = parts[0].parse()
+            .map_err(|_| anyhow::anyhow!("invalid range start: {}", parts[0]))?;
+        let e: u32 = parts[1].parse()
+            .map_err(|_| anyhow::anyhow!("invalid range end: {}", parts[1]))?;
+        (Some(s), Some(e))
+    } else {
+        (None, None)
+    };
+
     // Parse spec: "x0@last" or "x0@5000"
     let parts: Vec<&str> = spec.splitn(2, '@').collect();
     if parts.len() != 2 {
@@ -131,13 +94,13 @@ pub fn print_taint(session: &Session, spec: &str, after: Option<u32>, data_only:
     let marked = bfs_slice_with_options(&scan_view, &[start_index], data_only);
     let total_marked = marked.count_ones();
 
-    // Count tainted in range if --after is specified
-    let (tainted_in_range, header_suffix) = if let Some(after_seq) = after {
+    // Count tainted in range if --range is specified
+    let (tainted_in_range, header_suffix) = if let (Some(rs), Some(re)) = (range_start, range_end) {
         let count = marked.iter().enumerate()
-            .filter(|(i, is_set)| **is_set && (*i as u32) >= after_seq)
+            .filter(|(i, is_set)| **is_set && (*i as u32) >= rs && (*i as u32) <= re)
             .count();
-        (count, format!("  (showing seq >= {})  ({} tainted in range / {} total tainted / {} lines)",
-                        after_seq, count, total_marked, session.total_lines))
+        (count, format!("  (showing seq {}-{})  ({} tainted in range / {} total tainted / {} lines)",
+                        rs, re, count, total_marked, session.total_lines))
     } else {
         (total_marked, format!("  ({} tainted lines / {} total)", total_marked, session.total_lines))
     };
@@ -163,9 +126,14 @@ pub fn print_taint(session: &Session, spec: &str, after: Option<u32>, data_only:
         if !*is_set {
             continue;
         }
-        // Apply --after filter
-        if let Some(after_seq) = after {
-            if (i as u32) < after_seq {
+        // Apply --range filter
+        if let Some(rs) = range_start {
+            if (i as u32) < rs {
+                continue;
+            }
+        }
+        if let Some(re) = range_end {
+            if (i as u32) > re {
                 continue;
             }
         }
@@ -247,7 +215,21 @@ pub fn print_info(session: &Session) {
 
 const MAX_SEARCH_RESULTS: usize = 30;
 
-pub fn print_search(session: &Session, pattern: &str) {
+pub fn print_search(session: &Session, pattern: &str, range: Option<&str>) {
+    // Parse range if provided: "START-END"
+    let (range_start, range_end) = if let Some(r) = range {
+        let parts: Vec<&str> = r.splitn(2, '-').collect();
+        if parts.len() == 2 {
+            let s: u32 = parts[0].parse().unwrap_or(0);
+            let e: u32 = parts[1].parse().unwrap_or(u32::MAX);
+            (s, e)
+        } else {
+            (0, session.total_lines.saturating_sub(1))
+        }
+    } else {
+        (0, session.total_lines.saturating_sub(1))
+    };
+
     let data: &[u8] = &session.mmap;
     let view = session.line_index_view();
     let pattern_lower = pattern.to_ascii_lowercase();
@@ -255,7 +237,7 @@ pub fn print_search(session: &Session, pattern: &str) {
     let mut matches: Vec<(u32, String)> = Vec::new();
     let mut total_matches: usize = 0;
 
-    for seq in 0..session.total_lines {
+    for seq in range_start..=range_end {
         if let Some(line_bytes) = view.get_line(data, seq) {
             let line = String::from_utf8_lossy(line_bytes);
             if line.to_ascii_lowercase().contains(&pattern_lower) {
@@ -267,7 +249,13 @@ pub fn print_search(session: &Session, pattern: &str) {
         }
     }
 
-    println!("Search: \"{}\"  {} matches", pattern, total_matches);
+    let range_suffix = if range.is_some() {
+        format!("  (seq {}-{})", range_start, range_end)
+    } else {
+        String::new()
+    };
+
+    println!("Search: \"{}\"  {} matches{}", pattern, total_matches, range_suffix);
     println!();
 
     for (seq, line) in &matches {
@@ -277,132 +265,6 @@ pub fn print_search(session: &Session, pattern: &str) {
     if total_matches > MAX_SEARCH_RESULTS {
         println!("... {} more matches", total_matches - MAX_SEARCH_RESULTS);
     }
-}
-
-pub fn print_calltree(session: &Session, addr_str: &str) -> Result<()> {
-    // Parse hex address: accept "0x1209e184" or "1209e184"
-    let addr_clean = addr_str.strip_prefix("0x").unwrap_or(addr_str);
-    let addr = u64::from_str_radix(addr_clean, 16)
-        .map_err(|_| anyhow::anyhow!("invalid hex address: {}", addr_str))?;
-
-    let tree = &session.call_tree;
-
-    // Find the node matching this address (pick the first/root-level one)
-    let node = tree.nodes.iter().find(|n| n.func_addr == addr);
-
-    let node = match node {
-        Some(n) => n,
-        None => {
-            bail!("address 0x{:x} not found in call tree", addr);
-        }
-    };
-
-    // Auto-flatten: follow single-child chains to reach the "real" node
-    let mut current = node;
-    let mut wrappers_skipped: u32 = 0;
-    while current.children_ids.len() == 1 {
-        let child = &tree.nodes[current.children_ids[0] as usize];
-        current = child;
-        wrappers_skipped += 1;
-    }
-
-    let insn_count = current.exit_seq.saturating_sub(current.entry_seq);
-    if wrappers_skipped > 0 {
-        println!("0x{:x} -> 0x{:x} (via {} wrappers)  seq {}-{}  {} insns",
-                 node.func_addr, current.func_addr, wrappers_skipped,
-                 current.entry_seq, current.exit_seq, insn_count);
-    } else {
-        println!("0x{:x}  seq {}-{}  {} insns",
-                 current.func_addr, current.entry_seq, current.exit_seq, insn_count);
-    }
-
-    if current.children_ids.is_empty() {
-        println!("  (no children)");
-        return Ok(());
-    }
-
-    // Group children by func_addr, collect stats
-    // Also track if each child group is itself a single-child chain (flatten in listing)
-    let mut child_groups: FxHashMap<u64, (u32, u32, u32, u32)> = FxHashMap::default();
-    // value: (count, min_entry_seq, max_exit_seq, total_insns)
-    // For single-child flattening in children, collect flattened info per child_id
-    struct FlattenedChild {
-        display_addr: u64,
-        wrappers: u32,
-    }
-    let mut flattened_children: Vec<FlattenedChild> = Vec::new();
-
-    for &child_id in &current.children_ids {
-        let child = &tree.nodes[child_id as usize];
-        // Follow single-child chains for this child too
-        let mut inner = child;
-        let mut child_wrappers: u32 = 0;
-        while inner.children_ids.len() == 1 {
-            inner = &tree.nodes[inner.children_ids[0] as usize];
-            child_wrappers += 1;
-        }
-        let child_insns = inner.exit_seq.saturating_sub(inner.entry_seq);
-        flattened_children.push(FlattenedChild {
-            display_addr: inner.func_addr,
-            wrappers: child_wrappers,
-        });
-
-        // Group by the flattened display address
-        let entry = child_groups.entry(inner.func_addr).or_insert((0, u32::MAX, 0, 0));
-        entry.0 += 1;
-        entry.1 = entry.1.min(inner.entry_seq);
-        entry.2 = entry.2.max(inner.exit_seq);
-        entry.3 += child_insns;
-    }
-
-    // Build groups for display, including wrapper info
-    struct GroupDisplay {
-        addr: u64,
-        count: u32,
-        min_entry: u32,
-        max_exit: u32,
-        total_insns: u32,
-        max_wrappers: u32,
-    }
-    let mut group_wrappers: FxHashMap<u64, u32> = FxHashMap::default();
-    for fc in &flattened_children {
-        let e = group_wrappers.entry(fc.display_addr).or_insert(0);
-        *e = (*e).max(fc.wrappers);
-    }
-
-    let mut groups: Vec<GroupDisplay> = child_groups
-        .into_iter()
-        .map(|(addr, (count, min_entry, max_exit, total_insns))| GroupDisplay {
-            addr,
-            count,
-            min_entry,
-            max_exit,
-            total_insns,
-            max_wrappers: group_wrappers.get(&addr).copied().unwrap_or(0),
-        })
-        .collect();
-    // Sort by first appearance (min_entry_seq)
-    groups.sort_unstable_by_key(|g| g.min_entry);
-
-    println!("  children:");
-
-    let max_children = 50;
-    let total_groups = groups.len();
-    for (i, g) in groups.iter().enumerate() {
-        if i >= max_children {
-            println!("    ... {} more children", total_groups - max_children);
-            break;
-        }
-        let via = if g.max_wrappers > 0 {
-            format!("  (via {} wrappers)", g.max_wrappers)
-        } else {
-            String::new()
-        };
-        println!("    0x{:x}  seq {}-{}  {} insns  x{}{}",
-                 g.addr, g.min_entry, g.max_exit, g.total_insns, g.count, via);
-    }
-
-    Ok(())
 }
 
 const MAX_XREF_RESULTS: usize = 30;

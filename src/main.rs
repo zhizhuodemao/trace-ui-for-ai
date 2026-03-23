@@ -3,7 +3,6 @@ pub mod flat;
 pub mod index;
 pub mod session;
 pub mod output;
-pub mod func_stats;
 
 use clap::{Parser, Subcommand};
 use anyhow::Result;
@@ -20,8 +19,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show trace structure (function call tree)
-    Overview,
     /// Show trace lines in a range
     Lines {
         /// Line range, e.g. "100-200"
@@ -31,9 +28,9 @@ enum Commands {
     Taint {
         /// Target spec, e.g. "x0@last" or "x0@5000"
         spec: String,
-        /// Only show tainted lines with seq >= this value
+        /// Only show tainted lines within this seq range, e.g. "3000-6000"
         #[arg(long)]
-        after: Option<u32>,
+        range: Option<String>,
         /// Skip control flow dependencies (only follow data dependencies)
         #[arg(long)]
         data_only: bool,
@@ -47,11 +44,9 @@ enum Commands {
     Search {
         /// Case-insensitive substring to search for
         pattern: String,
-    },
-    /// Show direct children of a function in the call tree
-    Calltree {
-        /// Function address, e.g. "0x1209e184" or "1209e184"
-        addr: String,
+        /// Only show matches within this seq range, e.g. "3000-6000"
+        #[arg(long)]
+        range: Option<String>,
     },
     /// Show all reads/writes to a memory address
     Xref {
@@ -75,9 +70,6 @@ fn main() -> Result<()> {
     let session = session::Session::open(&cli.file)?;
 
     match cli.command {
-        Commands::Overview => {
-            output::print_overview(&session);
-        }
         Commands::Lines { range } => {
             let parts: Vec<&str> = range.splitn(2, '-').collect();
             if parts.len() != 2 {
@@ -87,17 +79,14 @@ fn main() -> Result<()> {
             let end: u32 = parts[1].parse()?;
             output::print_lines(&session, start, end);
         }
-        Commands::Taint { spec, after, data_only, ignore_sp } => {
-            output::print_taint(&session, &spec, after, data_only, ignore_sp)?;
+        Commands::Taint { spec, range, data_only, ignore_sp } => {
+            output::print_taint(&session, &spec, range.as_deref(), data_only, ignore_sp)?;
         }
         Commands::Info => {
             output::print_info(&session);
         }
-        Commands::Search { pattern } => {
-            output::print_search(&session, &pattern);
-        }
-        Commands::Calltree { addr } => {
-            output::print_calltree(&session, &addr)?;
+        Commands::Search { pattern, range } => {
+            output::print_search(&session, &pattern, range.as_deref());
         }
         Commands::Xref { addr } => {
             output::print_xref(&session, &addr)?;
