@@ -33,3 +33,5 @@ docs/*
 # Trace files
 *.trace
 trace-*.txt
+trace_init.log
+trace_intercept.log

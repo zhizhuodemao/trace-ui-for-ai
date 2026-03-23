@@ -31,6 +31,42 @@ enum Commands {
     Taint {
         /// Target spec, e.g. "x0@last" or "x0@5000"
         spec: String,
+        /// Only show tainted lines with seq >= this value
+        #[arg(long)]
+        after: Option<u32>,
+        /// Skip control flow dependencies (only follow data dependencies)
+        #[arg(long)]
+        data_only: bool,
+        /// Filter out lines that only modify SP/FP registers
+        #[arg(long)]
+        ignore_sp: bool,
+    },
+    /// Show basic trace info (module, lines, entry, function count)
+    Info,
+    /// Search for a text pattern in the trace file
+    Search {
+        /// Case-insensitive substring to search for
+        pattern: String,
+    },
+    /// Show direct children of a function in the call tree
+    Calltree {
+        /// Function address, e.g. "0x1209e184" or "1209e184"
+        addr: String,
+    },
+    /// Show all reads/writes to a memory address
+    Xref {
+        /// Memory address, e.g. "0x123e7024" or "123e7024"
+        addr: String,
+    },
+    /// Reconstruct memory state at a given seq (hexdump)
+    Memdump {
+        /// Memory address, e.g. "0x123e7024" or "123e7024"
+        addr: String,
+        /// Number of bytes to dump (decimal, max 256)
+        size: usize,
+        /// Seq number to reconstruct at (default: last seq in trace)
+        #[arg(long)]
+        at: Option<u32>,
     },
 }
 
@@ -51,8 +87,23 @@ fn main() -> Result<()> {
             let end: u32 = parts[1].parse()?;
             output::print_lines(&session, start, end);
         }
-        Commands::Taint { spec } => {
-            output::print_taint(&session, &spec)?;
+        Commands::Taint { spec, after, data_only, ignore_sp } => {
+            output::print_taint(&session, &spec, after, data_only, ignore_sp)?;
+        }
+        Commands::Info => {
+            output::print_info(&session);
+        }
+        Commands::Search { pattern } => {
+            output::print_search(&session, &pattern);
+        }
+        Commands::Calltree { addr } => {
+            output::print_calltree(&session, &addr)?;
+        }
+        Commands::Xref { addr } => {
+            output::print_xref(&session, &addr)?;
+        }
+        Commands::Memdump { addr, size, at } => {
+            output::print_memdump(&session, &addr, size, at)?;
         }
     }
 

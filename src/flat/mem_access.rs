@@ -73,6 +73,21 @@ impl<'a> MemAccessView<'a> {
         })
     }
 
+    /// Iterate (addr, records) for all addresses in [lo, hi).
+    /// Addresses are sorted, so we use binary search for the range boundaries.
+    pub fn query_range(&self, lo: u64, hi: u64) -> impl Iterator<Item = (u64, &'a [FlatMemAccessRecord])> + '_ {
+        // Find first index >= lo
+        let start_idx = self.addrs.partition_point(|&a| a < lo);
+        // Find first index >= hi
+        let end_idx = self.addrs.partition_point(|&a| a < hi);
+        (start_idx..end_idx).map(move |i| {
+            let addr = self.addrs[i];
+            let rec_start = self.offsets[i] as usize;
+            let rec_end = self.offsets[i + 1] as usize;
+            (addr, &self.records[rec_start..rec_end])
+        })
+    }
+
     #[allow(dead_code)]
     pub fn total_records(&self) -> usize {
         self.records.len()
