@@ -194,3 +194,7 @@ Core algorithms carried over from trace-ui / 核心算法继承自 trace-ui：
 ## License / 许可证
 
 [Personal Use License](LICENSE)
+
+This project is a fork of [trace-ui](https://github.com/imj01y/trace-ui), modified with the original author's permission. It is intended **solely for personal study and non-commercial research**. Any commercial use, redistribution, or use within a business/organizational context is prohibited under the license terms.
+
+本项目 fork 自 [trace-ui](https://github.com/imj01y/trace-ui)，修改已获原作者授权。仅供**个人学习和非商业研究**使用，禁止任何商业用途、再分发或在企业/组织环境中使用。
