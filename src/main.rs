@@ -31,6 +31,9 @@ enum Commands {
         /// Only show tainted lines within this seq range, e.g. "3000-6000"
         #[arg(long)]
         range: Option<String>,
+        /// Only show tainted lines whose SO offset falls in this range, e.g. "0x246F00-0x249800"
+        #[arg(long)]
+        addr: Option<String>,
         /// Skip control flow dependencies (only follow data dependencies)
         #[arg(long)]
         data_only: bool,
@@ -47,11 +50,19 @@ enum Commands {
         /// Only show matches within this seq range, e.g. "3000-6000"
         #[arg(long)]
         range: Option<String>,
+        /// Only show matches whose SO offset falls in this range, e.g. "0x246F00-0x249800"
+        #[arg(long)]
+        addr: Option<String>,
     },
     /// Show all reads/writes to a memory address
     Xref {
         /// Memory address, e.g. "0x123e7024" or "123e7024"
         addr: String,
+    },
+    /// List all calls to a function by SO offset
+    Calls {
+        /// Function SO offset, e.g. "0x4E73BC" or "4E73BC"
+        func: String,
     },
     /// Reconstruct memory state at a given seq (hexdump)
     Memdump {
@@ -79,17 +90,20 @@ fn main() -> Result<()> {
             let end: u32 = parts[1].parse()?;
             output::print_lines(&session, start, end);
         }
-        Commands::Taint { spec, range, data_only, ignore_sp } => {
-            output::print_taint(&session, &spec, range.as_deref(), data_only, ignore_sp)?;
+        Commands::Taint { spec, range, addr, data_only, ignore_sp } => {
+            output::print_taint(&session, &spec, range.as_deref(), addr.as_deref(), data_only, ignore_sp)?;
         }
         Commands::Info => {
             output::print_info(&session);
         }
-        Commands::Search { pattern, range } => {
-            output::print_search(&session, &pattern, range.as_deref());
+        Commands::Search { pattern, range, addr } => {
+            output::print_search(&session, &pattern, range.as_deref(), addr.as_deref());
         }
         Commands::Xref { addr } => {
             output::print_xref(&session, &addr)?;
+        }
+        Commands::Calls { func } => {
+            output::print_calls(&session, &func)?;
         }
         Commands::Memdump { addr, size, at } => {
             output::print_memdump(&session, &addr, size, at)?;

@@ -43,7 +43,7 @@ pub fn print_lines(session: &Session, start: u32, end: u32) {
     }
 }
 
-pub fn print_taint(session: &Session, spec: &str, range: Option<&str>, data_only: bool, ignore_sp: bool) -> Result<()> {
+pub fn print_taint(session: &Session, spec: &str, range: Option<&str>, addr: Option<&str>, data_only: bool, ignore_sp: bool) -> Result<()> {
     // Parse range if provided: "START-END"
     let (range_start, range_end) = if let Some(r) = range {
         let parts: Vec<&str> = r.splitn(2, '-').collect();
@@ -58,6 +58,9 @@ pub fn print_taint(session: &Session, spec: &str, range: Option<&str>, data_only
     } else {
         (None, None)
     };
+
+    // Parse addr range if provided: "0xSTART-0xEND"
+    let addr_filter = addr.and_then(parse_addr_range);
 
     // Parse spec: "x0@last" or "x0@5000"
     let parts: Vec<&str> = spec.splitn(2, '@').collect();
@@ -140,6 +143,17 @@ pub fn print_taint(session: &Session, spec: &str, range: Option<&str>, data_only
         if let Some(line_bytes) = view.get_line(data, i as u32) {
             let line = String::from_utf8_lossy(line_bytes);
 
+            // Apply --addr filter
+            if let Some((addr_lo, addr_hi)) = addr_filter {
+                if let Some(offset) = extract_so_offset(&line) {
+                    if offset < addr_lo || offset > addr_hi {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+
             // Apply --ignore-sp filter
             if ignore_sp && is_sp_fp_only_line(&line) {
                 skipped_sp += 1;
@@ -198,6 +212,33 @@ fn is_sp_fp_only_line(line: &str) -> bool {
     has_any_reg && !has_non_sp_fp
 }
 
+/// Extract SO offset from a trace line.
+/// Trace format: `[timestamp][libtiny.so 0xOFFSET] [opcode] ...`
+/// Returns the hex offset (e.g. 0x243d38) or None if not found.
+fn extract_so_offset(line: &str) -> Option<u64> {
+    // Find the second '[' which starts the module bracket: "][libtiny.so 0xOFFSET]"
+    let first_close = line.find(']')?;
+    let rest = &line[first_close + 1..];
+    // rest starts with "[libtiny.so 0x..."
+    if !rest.starts_with('[') { return None; }
+    let inner_end = rest.find(']')?;
+    let bracket_content = &rest[1..inner_end]; // "libtiny.so 0x243d38"
+    let hex_start = bracket_content.find(" 0x")?;
+    let hex_str = &bracket_content[hex_start + 3..];
+    u64::from_str_radix(hex_str, 16).ok()
+}
+
+/// Parse an addr range like "0x246F00-0x249800" into (start, end).
+fn parse_addr_range(addr_range: &str) -> Option<(u64, u64)> {
+    let parts: Vec<&str> = addr_range.splitn(2, '-').collect();
+    if parts.len() != 2 { return None; }
+    let start_clean = parts[0].strip_prefix("0x").or_else(|| parts[0].strip_prefix("0X")).unwrap_or(parts[0]);
+    let end_clean = parts[1].strip_prefix("0x").or_else(|| parts[1].strip_prefix("0X")).unwrap_or(parts[1]);
+    let start = u64::from_str_radix(start_clean, 16).ok()?;
+    let end = u64::from_str_radix(end_clean, 16).ok()?;
+    Some((start, end))
+}
+
 pub fn print_info(session: &Session) {
     let data: &[u8] = &session.mmap;
     let module_name = extract_module_name(data);
@@ -215,7 +256,7 @@ pub fn print_info(session: &Session) {
 
 const MAX_SEARCH_RESULTS: usize = 30;
 
-pub fn print_search(session: &Session, pattern: &str, range: Option<&str>) {
+pub fn print_search(session: &Session, pattern: &str, range: Option<&str>, addr: Option<&str>) {
     // Parse range if provided: "START-END"
     let (range_start, range_end) = if let Some(r) = range {
         let parts: Vec<&str> = r.splitn(2, '-').collect();
@@ -230,6 +271,9 @@ pub fn print_search(session: &Session, pattern: &str, range: Option<&str>) {
         (0, session.total_lines.saturating_sub(1))
     };
 
+    // Parse addr range if provided: "0xSTART-0xEND"
+    let addr_filter = addr.and_then(parse_addr_range);
+
     let data: &[u8] = &session.mmap;
     let view = session.line_index_view();
     let pattern_lower = pattern.to_ascii_lowercase();
@@ -241,6 +285,16 @@ pub fn print_search(session: &Session, pattern: &str, range: Option<&str>) {
         if let Some(line_bytes) = view.get_line(data, seq) {
             let line = String::from_utf8_lossy(line_bytes);
             if line.to_ascii_lowercase().contains(&pattern_lower) {
+                // Apply addr filter
+                if let Some((addr_lo, addr_hi)) = addr_filter {
+                    if let Some(offset) = extract_so_offset(&line) {
+                        if offset < addr_lo || offset > addr_hi {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
                 total_matches += 1;
                 if matches.len() < MAX_SEARCH_RESULTS {
                     matches.push((seq, line.into_owned()));
@@ -254,8 +308,13 @@ pub fn print_search(session: &Session, pattern: &str, range: Option<&str>) {
     } else {
         String::new()
     };
+    let addr_suffix = if let Some(a) = addr {
+        format!("  (addr {})", a)
+    } else {
+        String::new()
+    };
 
-    println!("Search: \"{}\"  {} matches{}", pattern, total_matches, range_suffix);
+    println!("Search: \"{}\"  {} matches{}{}", pattern, total_matches, range_suffix, addr_suffix);
     println!();
 
     for (seq, line) in &matches {
@@ -309,6 +368,82 @@ pub fn print_xref(session: &Session, addr_str: &str) -> Result<()> {
 
 const MAX_MEMDUMP_SIZE: usize = 256;
 
+/// Extract module base address from the first trace line.
+/// Line format: `[...][libtiny.so 0xOFFSET] [...] 0xABSOLUTE: "..."`
+/// module_base = ABSOLUTE - OFFSET
+fn extract_module_base(data: &[u8]) -> Option<u64> {
+    let search_end = data.len().min(4096);
+    let haystack = std::str::from_utf8(&data[..search_end]).ok()?;
+    // Find SO offset from [module 0xOFFSET]
+    let bracket_start = haystack.find("][")?;
+    let inner = &haystack[bracket_start + 2..];
+    let bracket_end = inner.find(']')?;
+    let bracket_content = &inner[..bracket_end];
+    let hex_pos = bracket_content.find(" 0x")?;
+    let offset_str = &bracket_content[hex_pos + 3..];
+    let so_offset = u64::from_str_radix(offset_str, 16).ok()?;
+    // Find absolute address: "0xABSOLUTE:"
+    let after_bracket = &inner[bracket_end + 1..];
+    // Skip opcode bracket: " [hexcode] 0xABSOLUTE:"
+    let abs_marker = after_bracket.find("] 0x")?;
+    let abs_start = &after_bracket[abs_marker + 4..];
+    let abs_end = abs_start.find(':')?;
+    let abs_addr = u64::from_str_radix(&abs_start[..abs_end], 16).ok()?;
+    Some(abs_addr - so_offset)
+}
+
+pub fn print_calls(session: &Session, func_str: &str) -> Result<()> {
+    let func_clean = func_str.strip_prefix("0x").or_else(|| func_str.strip_prefix("0X")).unwrap_or(func_str);
+    let func_offset = u64::from_str_radix(func_clean, 16)
+        .map_err(|_| anyhow::anyhow!("invalid hex address: {}", func_str))?;
+
+    let data: &[u8] = &session.mmap;
+    let module_base = extract_module_base(data)
+        .ok_or_else(|| anyhow::anyhow!("cannot determine module base from trace"))?;
+    let func_abs = module_base + func_offset;
+
+    let line_view = session.line_index_view();
+
+    // Find all CallTree nodes matching this func_addr
+    let mut calls: Vec<&crate::core::call_tree::CallTreeNode> = session.call_tree.nodes.iter()
+        .filter(|n| n.func_addr == func_abs)
+        .collect();
+    calls.sort_by_key(|n| n.entry_seq);
+
+    println!("Calls to 0x{:x} (abs 0x{:x}):  {} calls",
+             func_offset, func_abs, calls.len());
+    println!();
+
+    for (i, node) in calls.iter().enumerate() {
+        let duration = if node.exit_seq != u32::MAX {
+            format!("{} lines", node.exit_seq - node.entry_seq)
+        } else {
+            "no return".to_string()
+        };
+
+        println!("Call #{:<3}  seq={:<10}  ret={:<10}  ({})",
+                 i + 1,
+                 node.entry_seq,
+                 if node.exit_seq != u32::MAX { format!("{}", node.exit_seq) } else { "-".to_string() },
+                 duration);
+
+        // Show the bl/blr instruction (1 line before entry) and first line of callee
+        if node.entry_seq > 0 {
+            if let Some(bl_line) = line_view.get_line(data, node.entry_seq - 1) {
+                let line = String::from_utf8_lossy(bl_line);
+                println!("  [{}] {}", node.entry_seq - 1, line);
+            }
+        }
+        if let Some(entry_line) = line_view.get_line(data, node.entry_seq) {
+            let line = String::from_utf8_lossy(entry_line);
+            println!("  [{}] {}", node.entry_seq, line);
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
 pub fn print_memdump(session: &Session, addr_str: &str, size: usize, at: Option<u32>) -> Result<()> {
     // Parse hex address
     let addr_clean = addr_str.strip_prefix("0x").unwrap_or(addr_str);
@@ -339,40 +474,66 @@ pub fn print_memdump(session: &Session, addr_str: &str, size: usize, at: Option<
 
     // Collect (byte_idx, seq, value) and pick the write with highest seq per byte.
     let mut byte_state: Vec<(u32, u8)> = vec![(0, 0); size]; // (best_seq, value)
-    let mut byte_has_data: Vec<bool> = vec![false; size];
+    let mut byte_has_write: Vec<bool> = vec![false; size];
+    // For bytes with no WRITE: track first READ to recover initial memory state
+    // (e.g. JNI-written data that the SO reads but never writes)
+    let mut byte_first_read: Vec<(u32, u8)> = vec![(u32::MAX, 0); size]; // (first_read_seq, value)
+    let mut byte_has_read: Vec<bool> = vec![false; size];
 
     for (rec_addr, records) in mem_view.query_range(lo, hi) {
         for rec in records {
-            if !rec.is_write() {
-                continue;
-            }
             if rec.seq > at_seq {
                 continue;
             }
-            let write_size = rec.size as u64;
-            for byte_off in 0..write_size {
+            let access_size = rec.size as u64;
+            for byte_off in 0..access_size {
                 let byte_addr = rec_addr + byte_off;
                 if byte_addr >= addr && byte_addr < addr + size as u64 {
                     let buf_idx = (byte_addr - addr) as usize;
                     let byte_val = ((rec.data >> (byte_off * 8)) & 0xFF) as u8;
-                    if !byte_has_data[buf_idx] || rec.seq > byte_state[buf_idx].0 {
-                        byte_state[buf_idx] = (rec.seq, byte_val);
-                        byte_has_data[buf_idx] = true;
+                    if rec.is_write() {
+                        if !byte_has_write[buf_idx] || rec.seq > byte_state[buf_idx].0 {
+                            byte_state[buf_idx] = (rec.seq, byte_val);
+                            byte_has_write[buf_idx] = true;
+                        }
+                    } else {
+                        // READ: keep the first (lowest seq) read for initial state
+                        if !byte_has_read[buf_idx] || rec.seq < byte_first_read[buf_idx].0 {
+                            byte_first_read[buf_idx] = (rec.seq, byte_val);
+                            byte_has_read[buf_idx] = true;
+                        }
                     }
                 }
             }
         }
     }
 
-    // Build final buffer
+    // Build final buffer: WRITE takes priority; fall back to first READ for initial state
     let final_buf: Vec<Option<u8>> = (0..size)
-        .map(|i| if byte_has_data[i] { Some(byte_state[i].1) } else { None })
+        .map(|i| {
+            if byte_has_write[i] {
+                Some(byte_state[i].1)
+            } else if byte_has_read[i] {
+                Some(byte_first_read[i].1)
+            } else {
+                None
+            }
+        })
         .collect();
+
+    // Count how many bytes came from READ fallback
+    let read_fill_count = (0..size).filter(|&i| !byte_has_write[i] && byte_has_read[i]).count();
 
     // Print hexdump
     let known_count = final_buf.iter().filter(|b| b.is_some()).count();
-    println!("Memory at 0x{:x}, {} bytes (at seq {}):  ({}/{} bytes known)",
-             addr, size, at_seq, known_count, size);
+    let write_count = byte_has_write.iter().filter(|&&b| b).count();
+    if read_fill_count > 0 {
+        println!("Memory at 0x{:x}, {} bytes (at seq {}):  ({}/{} bytes known, {} from writes, {} from reads)",
+                 addr, size, at_seq, known_count, size, write_count, read_fill_count);
+    } else {
+        println!("Memory at 0x{:x}, {} bytes (at seq {}):  ({}/{} bytes known)",
+                 addr, size, at_seq, known_count, size);
+    }
     println!();
 
     for row_start in (0..size).step_by(16) {

@@ -35,6 +35,10 @@ trace-cli <file> search "eor " --range 3000-6000
 # Backward taint analysis / 反向污点分析（grep 做不到的核心能力）
 trace-cli <file> taint x0@last --data-only
 trace-cli <file> taint x0@5930 --data-only --range 3000-6000
+trace-cli <file> taint x0@last --data-only --addr 0x246F00-0x249800
+
+# List all calls to a function / 查看函数调用记录（输入 SO 偏移）
+trace-cli <file> calls 0x4E73BC
 
 # Reconstruct memory state / 重构内存状态（提取密钥、常量、查找表）
 trace-cli <file> memdump 0x123d6070 64 --at 730000
@@ -51,7 +55,8 @@ trace-cli <file> xref 0x123df18c
 | `lines` | "Show me these instructions" / "给我看这几行指令" | Raw trace lines with registers + memory / 原始 trace 行（含寄存器+内存注解） |
 | `search` | "Find this pattern" / "找这个东西" | Matching lines with seq numbers (≤30) / 匹配行+行号（≤30 条） |
 | `taint` | "Where does this value come from?" / "这个值从哪来的？" | Backward dependency chain (≤50 lines) / 反向依赖链指令（≤50 行） |
-| `memdump` | "What's in memory here?" / "这个地址里存了什么？" | Hexdump from write history / 从写入历史重构的 hexdump |
+| `calls` | "How was this function called?" / "这个函数被怎么调用的？" | All calls with seq, args context / 所有调用记录+参数上下文 |
+| `memdump` | "What's in memory here?" / "这个地址里存了什么？" | Hexdump from write+read history / 从写入+读取历史重构的 hexdump |
 | `xref` | "Who accesses this address?" / "谁访问了这个地址？" | All reads/writes (≤30) / 所有读写记录（≤30 条） |
 
 ## Taint Flags / 污点分析参数
@@ -60,6 +65,7 @@ trace-cli <file> xref 0x123df18c
 |------|--------------|
 | `--data-only` | Cut control flow deps. 26% → 0.14% noise / 切断控制流依赖，噪声从 26% 降到 0.14% |
 | `--range START-END` | Only show tainted lines in range / 只显示指定 seq 范围内的污点行 |
+| `--addr 0xSTART-0xEND` | Filter by SO offset range / 按 SO 偏移地址范围过滤（search/taint 通用） |
 
 ## Real-World Validation / 实战验证
 
